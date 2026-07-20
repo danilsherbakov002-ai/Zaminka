@@ -20,6 +20,10 @@ jobs:
 
       - name: Generate missing Android platform files
         run: flutter create --platforms=android --project-name direx .
+
+      - name: Fix Kotlin version
+        run: sed -i 's/id "org.jetbrains.kotlin.android" version "[0-9.]*" apply false/id "org.jetbrains.kotlin.android" version "1.9.24" apply false/' android/settings.gradle
+
       - name: Get dependencies
         run: flutter pub get
 

@@ -13,45 +13,30 @@ const Map<String, List<double>> eqPresets = {
 ///
 /// Эквалайзер использует нативный ExoPlayer-эффект [AndroidEqualizer]
 /// (доступен на Android; на iOS just_audio не даёт доступа к параметрическому
-/// EQ без platform-канала — для полного кросс-платформенного DSP в бою
-/// потребуется нативный модуль, например на базе Superpowered SDK).
+/// EQ без platform-канала).
 ///
 /// "Пространственный" эффект реализован как приближение через
-/// [AndroidLoudnessEnhancer] + плавное затухание/усиление громкости —
-/// это не полноценная convolution-реверберация, но создаёт эффект присутствия
-/// без тяжёлых нативных зависимостей.
+/// [AndroidLoudnessEnhancer] + плавное затухание/усиление громкости.
 class AudioEngine {
-  final AudioPlayer _player = AudioPlayer();
-  AudioPlayer? _nextPlayer; // для кроссфейда
+  final AndroidEqualizer _equalizer = AndroidEqualizer();
+  final AndroidLoudnessEnhancer _loudnessEnhancer = AndroidLoudnessEnhancer();
 
-  AndroidEqualizer? _equalizer;
-  AndroidLoudnessEnhancer? _loudnessEnhancer;
+  late final AudioPlayer _player = AudioPlayer(
+    audioPipeline: AudioPipeline(
+      androidAudioEffects: [_loudnessEnhancer, _equalizer],
+    ),
+  );
+
+  AudioPlayer? _nextPlayer; // для кроссфейда
 
   double _spatialDepth = 0.0;
   Timer? _spatialTimer;
 
   AudioPlayer get player => _player;
-  bool get isEqualizerSupported => _equalizer != null;
 
   Future<void> init() async {
-    _equalizer = AndroidEqualizer();
-    _loudnessEnhancer = AndroidLoudnessEnhancer();
-
-    try {
-      await _player.setAudioSource(
-        AudioSource.uri(Uri.parse('asset:///')), // placeholder, заменяется в loadTrack
-        preload: false,
-      );
-    } catch (_) {
-      // источник ещё не задан — это нормально при инициализации
-    }
-
-    _player.setAudioEffects([
-      _loudnessEnhancer!,
-      _equalizer!,
-    ]);
-    await _loudnessEnhancer!.setEnabled(true);
-    await _equalizer!.setEnabled(true);
+    await _loudnessEnhancer.setEnabled(true);
+    await _equalizer.setEnabled(true);
   }
 
   Future<void> loadTrack(String uriOrPath) async {
@@ -63,8 +48,7 @@ class AudioEngine {
 
   /// Установка гейна одной полосы EQ (index: 0..4, gainDb: -12..12).
   Future<void> setEQBand(int index, double gainDb) async {
-    if (_equalizer == null) return;
-    final params = await _equalizer!.parameters;
+    final params = await _equalizer.parameters;
     if (index < 0 || index >= params.bands.length) return;
     final band = params.bands[index];
     final clamped = gainDb.clamp(params.minDecibels, params.maxDecibels);
@@ -73,8 +57,8 @@ class AudioEngine {
 
   Future<void> applyPreset(String name) async {
     final gains = eqPresets[name];
-    if (gains == null || _equalizer == null) return;
-    final params = await _equalizer!.parameters;
+    if (gains == null) return;
+    final params = await _equalizer.parameters;
     final bandCount = params.bands.length;
     for (int i = 0; i < bandCount && i < gains.length; i++) {
       await setEQBand(i, gains[i]);
@@ -82,12 +66,10 @@ class AudioEngine {
   }
 
   /// Плавная регулировка "presence": 0 = плоско, 1 = максимальный эффект.
-  /// Реализовано через громкостную огибающую (loudness enhancer target gain).
   void setSpatialDepth(double value) {
     _spatialDepth = value.clamp(0.0, 1.0);
-    _loudnessEnhancer?.setTargetGain(_spatialDepth * 6.0); // до +6 дБ presence
+    _loudnessEnhancer.setTargetGain(_spatialDepth * 6.0); // до +6 дБ presence
 
-    // Лёгкое "дыхание" громкости для ощущения объёма (не блокирует поток).
     _spatialTimer?.cancel();
     if (_spatialDepth > 0.05) {
       _spatialTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
@@ -117,8 +99,6 @@ class AudioEngine {
     }
 
     await _player.stop();
-    await _player.dispose();
-    // Новый плеер становится текущим (в реальном приложении — через смену ссылки в состоянии).
   }
 
   Future<void> dispose() async {
